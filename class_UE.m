@@ -82,6 +82,7 @@ classdef class_UE
         % --- 시간 게이트 상태 (serving 셀 기간 동안 고정) ---
         Th_gate = 0;                 % 이번 서빙셀 기간의 Th
         Tc_gate = 0;                 % 이번 서빙셀 기간의 Tc
+        Te_gate = 0;                 % footprint-aware timer gate
         gate_serv_idx = 0;           % Th/Tc가 유효한 서빙셀 인덱스
         gate_ho_completed = false;   % 이번 체류기간 동안 HO 실행을 완료했는지
 
@@ -97,6 +98,7 @@ classdef class_UE
         DYN_GRANT_TX_COUNT = 0;
         DYN_GRANT_FAIL_COUNT = 0;
         DYN_GRANT_FALLBACK_COUNT = 0;
+        CAND_MISS_COUNT = 0;
     end
 
     methods
@@ -150,6 +152,7 @@ classdef class_UE
             % TW CHO
             obj.Th_gate = 0;
             obj.Tc_gate = 0;
+            obj.Te_gate = 0;
             obj.gate_serv_idx = 0;
             obj.gate_ho_completed = false;
 
@@ -164,6 +167,7 @@ classdef class_UE
             obj.DYN_GRANT_TX_COUNT = 0;
             obj.DYN_GRANT_FAIL_COUNT = 0;
             obj.DYN_GRANT_FALLBACK_COUNT = 0;
+            obj.CAND_MISS_COUNT = 0;
         end
         
         function ue_array = RESET_UE(ue_array)
@@ -191,6 +195,7 @@ classdef class_UE
                 ue_array(i).DYN_GRANT_TX_COUNT = 0;
                 ue_array(i).DYN_GRANT_FAIL_COUNT = 0;
                 ue_array(i).DYN_GRANT_FALLBACK_COUNT = 0;
+                ue_array(i).CAND_MISS_COUNT = 0;
             end
         end
 

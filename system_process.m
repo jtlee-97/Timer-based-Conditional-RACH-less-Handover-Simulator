@@ -243,6 +243,22 @@ function [histories, episode_results, final_results, master_histories] = system_
     d2Thresh1CFRA = d2Thresh1Common;
     d2Thresh1Rachless = d2Thresh1Common;
     T310    = choMsgCfg.T310;   % RLF 타이머 임계
+    % Timer predictor / footprint config (global from system_parameter)
+    if ~exist('timerPredictor', 'var') || isempty(timerPredictor)
+        timerPredictor = 'circle';
+    end
+    if ~exist('footprintModelMode', 'var') || isempty(footprintModelMode)
+        footprintModelMode = 'ellipse_elevation';
+    end
+    if ~exist('footprintMaxTe', 'var') || isempty(footprintMaxTe)
+        footprintMaxTe = 60;
+    end
+    if ~exist('clockDriftMs', 'var') || isempty(clockDriftMs)
+        clockDriftMs = 0;
+    end
+    if ~exist('deltaOffMs', 'var') || isempty(deltaOffMs)
+        deltaOffMs = 0;
+    end
     % (참고) Thresh1_*, Thresh2는 현재 사용 안함
     Thresh1_1 = cellISD - cellRadius; %#ok<NASGU>
     Thresh1_2 = cellISD/2;            %#ok<NASGU>
@@ -327,7 +343,16 @@ function [histories, episode_results, final_results, master_histories] = system_
                         R_m = R * 1e3;
                     end
             
-                    [Th_fix, Tc_fix, ~] = compute_time_window(UE_m, C_m, R_m, v_sat_m, v_ue_m, true, false);
+                    fp = local_build_timer_footprint(timerPredictor, footprintModelMode, R_m, v_sat_m, footprintA, footprintB, footprintTheta, footprintElevDeg, footprintMaxTe);
+                    [Th_fix, Tc_fix, infoTW] = compute_time_window(UE_m, C_m, R_m, v_sat_m, v_ue_m, true, false, fp);
+                    Te_fix = Th_fix;
+                    if strcmpi(fp.model, 'circle')
+                        Te_fix = Tc_fix;
+                    elseif strcmpi(fp.model, 'hex')
+                        Te_fix = Th_fix;
+                    elseif strcmpi(fp.model, 'ellipse')
+                        Te_fix = Th_fix;
+                    end
             
                     % === (신규) 상세 디버그 로그: 실제 좌표·속도·방향 + 수식 중간값 전부 출력 ===
                     log_gate_state( ...
@@ -340,6 +365,7 @@ function [histories, episode_results, final_results, master_histories] = system_
                     % 게이트 값 저장
                     ue_array(i).Th_gate = Th_fix;              
                     ue_array(i).Tc_gate = Tc_fix;
+                    ue_array(i).Te_gate = Te_fix;
                     ue_array(i).gate_serv_idx = serv;
                     ue_array(i).gate_ho_completed = false;
             
@@ -376,13 +402,17 @@ function [histories, episode_results, final_results, master_histories] = system_
                         cfgRachless = choMsgCfg;
                         cfgRachless.RACHLESS_GRANT_MODE = 'dynamic';
                         ue_array(i) = MTD_D2_CHO_rachless(ue_array(i), sat, Hys, d2Thresh1Rachless, d2Thresh2, current_time, cfgRachless);
-                    case 9   % A3T1-CHO-RACHless (serving ML 기반 execution + dynamic grant starts at execution)
+                    case 9   % A3T1-CHO-RACHless (execution timer-aware)
                         cfgRachless = choMsgCfg;
                         cfgRachless.RACHLESS_GRANT_MODE = 'dynamic';
                         cfgRachless.DYN_GRANT_PREP_SEND = false;
                         if ~isfield(cfgRachless, 'EXEC_ML_THRESHOLD') || isempty(cfgRachless.EXEC_ML_THRESHOLD)
                             cfgRachless.EXEC_ML_THRESHOLD = cellRadius;
                         end
+                        cfgRachless.TIMER_PREDICTOR = timerPredictor;
+                        cfgRachless.CLOCK_DRIFT_MS = clockDriftMs;
+                        cfgRachless.DELTA_OFF_MS = deltaOffMs;
+                        cfgRachless.EXEC_TIME_THRESHOLD = max(0, ue_array(i).Te_gate);
                         ue_array(i) = MTD_A3T1_CHO_rachless(ue_array(i), sat, Offset, TTT, current_time, cfgRachless);
                     case 10  % D2T1-CHO-RACHless (D2 prep + serving ML 기반 execution)
                         cfgRachless = choMsgCfg;
@@ -415,6 +445,7 @@ function [histories, episode_results, final_results, master_histories] = system_
         % ---- EPISODE 단위 결과 집계 ----
         for i = 1:numel(ue_array)
             episode_results(i, idx) = episode_results(i, idx).calculate_average(histories(i, idx), SAMPLE_TIME);
+            episode_results(i, idx).CAND_MISS_COUNT = ue_array(i).CAND_MISS_COUNT;
         end
         idx = idx + 1;
     end
@@ -460,6 +491,8 @@ function ue_array = RESET_UE(ue_array)
         ue_array(i).DYN_GRANT_TX_COUNT = 0;
         ue_array(i).DYN_GRANT_FAIL_COUNT = 0;
         ue_array(i).DYN_GRANT_FALLBACK_COUNT = 0;
+        ue_array(i).CAND_MISS_COUNT = 0;
+        ue_array(i).Te_gate = 0;
     end
 end
 
@@ -492,6 +525,33 @@ function ue_array = UPDATE_UE(sat, ue_array, is_initial, sat_histories, current_
         ue_array(i) = ue_array(i).set_filter_coeff(k_rsrp);
         ue_array(i) = ue_array(i).update_rsrp(sat.TXPW_dBm);   % (원 코드 흐름 유지)
         ue_array(i) = ue_array(i).update_rsrp_filtered();
+    end
+end
+
+function fp = local_build_timer_footprint(timerPredictor, footprintModelMode, R, v_sat_xy, footprintA, footprintB, footprintTheta, footprintElevDeg, footprintMaxTe)
+    tp = lower(string(timerPredictor));
+    switch tp
+        case "circle"
+            fp = struct('model','circle', 'maxTe', footprintMaxTe);
+        case "hex"
+            fp = struct('model','hex', 'maxTe', footprintMaxTe);
+        case "ellipse"
+            mode = lower(string(footprintModelMode));
+            if mode == "ellipse_elevation"
+                elev = deg2rad(footprintElevDeg);
+                A = R / max(sin(elev), 1e-3);
+                B = R;
+            else
+                A = footprintA;
+                B = footprintB;
+            end
+            theta = footprintTheta;
+            if abs(theta) < 1e-12
+                theta = atan2(v_sat_xy(2), v_sat_xy(1));
+            end
+            fp = struct('model','ellipse', 'A',A, 'B',B, 'theta',theta, 'maxTe', footprintMaxTe);
+        otherwise
+            fp = struct('model','circle', 'maxTe', footprintMaxTe);
     end
 end
 

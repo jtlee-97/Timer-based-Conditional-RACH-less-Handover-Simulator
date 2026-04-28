@@ -19,6 +19,9 @@ function ue = MTD_A3T1_CHO_rachless(ue, sat, Offset_A3, TTT, current_time, msgCf
     DYN_GRANT_PREP_SEND = true;
     RB_PER_GRANT_TX = 1;
     EXEC_ML_THRESHOLD = 23120;
+    EXEC_TIME_THRESHOLD = [];
+    CLOCK_DRIFT_MS = 0;
+    DELTA_OFF_MS = 0;
     EXEC_A3_FAIL_MAX = 5;
     EXEC_SECOND_EVENT_ENABLE = true;
     T304 = 0.5;
@@ -99,6 +102,15 @@ function ue = MTD_A3T1_CHO_rachless(ue, sat, Offset_A3, TTT, current_time, msgCf
         end
         if isfield(msgCfg, 'EXEC_ML_THRESHOLD') && ~isempty(msgCfg.EXEC_ML_THRESHOLD)
             EXEC_ML_THRESHOLD = msgCfg.EXEC_ML_THRESHOLD;
+        end
+        if isfield(msgCfg, 'EXEC_TIME_THRESHOLD') && ~isempty(msgCfg.EXEC_TIME_THRESHOLD)
+            EXEC_TIME_THRESHOLD = msgCfg.EXEC_TIME_THRESHOLD;
+        end
+        if isfield(msgCfg, 'CLOCK_DRIFT_MS') && ~isempty(msgCfg.CLOCK_DRIFT_MS)
+            CLOCK_DRIFT_MS = msgCfg.CLOCK_DRIFT_MS;
+        end
+        if isfield(msgCfg, 'DELTA_OFF_MS') && ~isempty(msgCfg.DELTA_OFF_MS)
+            DELTA_OFF_MS = msgCfg.DELTA_OFF_MS;
         end
         if isfield(msgCfg, 'EXEC_A3_FAIL_MAX') && ~isempty(msgCfg.EXEC_A3_FAIL_MAX)
             EXEC_A3_FAIL_MAX = msgCfg.EXEC_A3_FAIL_MAX;
@@ -208,6 +220,7 @@ function ue = MTD_A3T1_CHO_rachless(ue, sat, Offset_A3, TTT, current_time, msgCf
             end
 
             valid_indices = find(cond1_vec);
+            ue.handover.valid_indices = valid_indices;
             [~, max_idx] = max(ue.RSRP_FILTERED(valid_indices));
             new_site_idx = valid_indices(max_idx);
 
@@ -299,7 +312,12 @@ function ue = MTD_A3T1_CHO_rachless(ue, sat, Offset_A3, TTT, current_time, msgCf
             end
         end
 
-        exec_trigger_t1 = (numel(ue.ML) >= serv) && (ue.ML(serv) >= EXEC_ML_THRESHOLD);
+        if ~isempty(EXEC_TIME_THRESHOLD)
+            t_exec_used = EXEC_TIME_THRESHOLD + (CLOCK_DRIFT_MS + DELTA_OFF_MS)/1000;
+            exec_trigger_t1 = ue.current_serving_time >= t_exec_used;
+        else
+            exec_trigger_t1 = (numel(ue.ML) >= serv) && (ue.ML(serv) >= EXEC_ML_THRESHOLD);
+        end
 
         if ue.handover.exec_TTT_check == 0
             ue.handover.exec_TTT_check = ue.handover.cho_cmd_rx_time;
@@ -339,8 +357,24 @@ function ue = MTD_A3T1_CHO_rachless(ue, sat, Offset_A3, TTT, current_time, msgCf
 
             ue.handover.prep_cond_fail_count = 0;
 
-            [~, exec_max_idx] = max(ue.RSRP_FILTERED(exec_valid_indices));
-            exec_best_targ = exec_valid_indices(exec_max_idx);
+            cand = struct();
+            cand.rsrp = ue.RSRP_FILTERED(exec_valid_indices);
+            cand.pred_stay = max(0, ue.ML(exec_valid_indices));
+            cand.exec_time = zeros(1, numel(exec_valid_indices)) + current_time;
+            cand.t_exit_serving = current_time;
+            cand.prepared_mask = ismember(exec_valid_indices, ue.handover.valid_indices);
+            [ord, ~, rankInfo] = rank_candidates_tscho(cand);
+            exec_best_targ = exec_valid_indices(ord(1));
+
+            if rankInfo.candidate_miss
+                ue.CAND_MISS_COUNT = ue.CAND_MISS_COUNT + 1;
+                prepared_ord = ord(cand.prepared_mask(ord));
+                if ~isempty(prepared_ord)
+                    exec_best_targ = exec_valid_indices(prepared_ord(1));
+                else
+                    exec_best_targ = ue.handover.targ_idx;
+                end
+            end
 
             if exec_best_targ ~= ue.handover.targ_idx
                 if VERBOSE

@@ -123,3 +123,18 @@ CHO_MSG_NLOS_KAPPA_MEAN = 1.20;         % path-length inflation mean (>1)
 CHO_MSG_NLOS_KAPPA_LN_SIGMA = 0.25;     % lognormal sigma
 CHO_MSG_NLOS_TAU_MEAN = 0.0005;         % [s] multipath mean excess (e.g., 0.5 ms)
 CHO_MSG_NLOS_EXCESS_MAX = 0.008;        % [s] cap for numerical/physical sanity
+
+%% ---- Timer predictor config (TS-CHO-RAL revision) ----
+if ~exist('timerPredictor', 'var')
+    timerPredictor = 'circle';  % 'circle' | 'hex' | 'ellipse'
+end
+if ~exist('footprintModelMode', 'var')
+    footprintModelMode = 'ellipse_elevation'; % 'ellipse_elevation' | 'ellipse_fit'
+end
+if ~exist('footprintA', 'var'), footprintA = cellRadius; end
+if ~exist('footprintB', 'var'), footprintB = cellRadius; end
+if ~exist('footprintTheta', 'var'), footprintTheta = 0; end
+if ~exist('footprintMaxTe', 'var'), footprintMaxTe = 60; end
+if ~exist('footprintElevDeg', 'var'), footprintElevDeg = 35; end
+if ~exist('clockDriftMs', 'var'), clockDriftMs = 0; end
+if ~exist('deltaOffMs', 'var'), deltaOffMs = 0; end

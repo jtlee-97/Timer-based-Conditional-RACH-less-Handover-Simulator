@@ -25,6 +25,7 @@ classdef class_EpisodeResult
         DYN_GRANT_TX_COUNT = 0;
         DYN_GRANT_FAIL_COUNT = 0;
         DYN_GRANT_FALLBACK_COUNT = 0;
+        CAND_MISS_COUNT = 0;
     end
 
     methods
