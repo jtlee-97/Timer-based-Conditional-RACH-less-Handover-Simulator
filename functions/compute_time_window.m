@@ -1,38 +1,66 @@
-function [Th, Tc, info] = compute_time_window(UE_xy, C_xy, R, v_sat_xy, v_ue_xy, use_hex, verbose)
-% Compute Th (hex) and Tc (circle) remain times from current state.
+function [Th, Tc, info] = compute_time_window(UE_xy, C_xy, R, v_sat_xy, v_ue_xy, use_hex, verbose, footprint)
+% Compute remain times from current state.
 % - UE_xy: [x y] UE 위치
 % - C_xy : [x y] 서빙 셀 중심
-% - R    : [m]   셀 반지름 (외접반지름, 원과 헥사곤 동일 값 사용)
+% - R    : [m]   셀 반지름 (원형/헥사곤 기준)
 % - v_sat_xy: [vx vy] 위성 지상투영 속도
 % - v_ue_xy : [vx vy] UE 속도 (모빌리티)
 % - use_hex : (bool) hex 경계 고려 (기본 true 권장)
 % - verbose : (bool)
+% - footprint: 구조체(선택)
+%     footprint.model = 'circle' (default) | 'ellipse'
+%     footprint.A = semi-major axis [m]
+%     footprint.B = semi-minor axis [m]
+%     footprint.theta = ellipse rotation [rad]
 %
 % Return:
-%   Th: 헥사곤 경계까지 남은 시간 (밖이면 0)
-%   Tc: 원 경계까지 남은 시간 (밖이면 0)
+%   Th: 경계까지 남은 시간 (ellipse 모드면 Te와 동일)
+%   Tc: 원 경계까지 남은 시간 (ellipse 모드에서도 baseline 비교용으로 반환)
 %   info: 구조체 디버그용
 
 if nargin < 6 || isempty(use_hex), use_hex = true; end
 if nargin < 7, verbose = false; end
+if nargin < 8 || isempty(footprint)
+    footprint = struct('model', 'circle');
+end
+if ~isfield(footprint, 'model') || isempty(footprint.model)
+    footprint.model = 'circle';
+end
 
 r0 = UE_xy - C_xy;                  % 상대 위치
 v_rel = v_sat_xy - v_ue_xy;         % 상대 속도
 
 [Tc, infoC] = tos_remain_circle(r0, v_rel, R, verbose);
-if use_hex
-    [Th, infoH] = tos_remain_hex(r0, v_rel, R, verbose);
-else
-    Th = Tc;                         % 헥사곤 대신 원으로 근사 사용 가능
-    infoH = struct('isInside', infoC.isInside);
+
+model = lower(string(footprint.model));
+switch model
+    case "ellipse"
+        if ~isfield(footprint, 'A') || ~isfield(footprint, 'B')
+            error('footprint.model=''ellipse'' requires footprint.A and footprint.B');
+        end
+        if ~isfield(footprint, 'theta') || isempty(footprint.theta)
+            footprint.theta = 0;
+        end
+        [Te, infoE] = tos_remain_ellipse(r0, v_rel, footprint.A, footprint.B, footprint.theta, verbose);
+        Th = Te;
+        infoH = struct('isInside', infoE.isInside, 'mode', 'ellipse_as_time_window');
+    otherwise
+        if use_hex
+            [Th, infoH] = tos_remain_hex(r0, v_rel, R, verbose);
+        else
+            Th = Tc;                         % 헥사곤 대신 원으로 근사 사용 가능
+            infoH = struct('isInside', infoC.isInside);
+        end
+        Te = [];
+        infoE = struct();
 end
 
 info = struct('r0', r0, 'v_rel', v_rel, ...
               'Tc', Tc, 'Th', Th, ...
-              'circle', infoC, 'hex', infoH);
+              'circle', infoC, 'hex', infoH, ...
+              'model', char(model), 'ellipse', infoE);
 end
 
-% ---- 아래 3개 helper는 질문에 준 코드 그대로 이식 ----
 function [Tc, info] = tos_remain_circle(r0, v, R, VERBOSE)
     rx=r0(1); ry=r0(2); vx=v(1); vy=v(2);
     V2 = vx*vx + vy*vy;  V = sqrt(V2);
@@ -55,6 +83,58 @@ function [Tc, info] = tos_remain_circle(r0, v, R, VERBOSE)
     end
     if ~info.isInside
         Tc = 0; if VERBOSE, fprintf('Outside now -> Tc=0 (future dwell=%.6f)\n', 2*Dt); end
+    end
+end
+
+function [Te, info] = tos_remain_ellipse(r0, v, A, B, theta, VERBOSE)
+    if A <= 0 || B <= 0
+        error('Ellipse semi-axis must be positive.');
+    end
+
+    Rm = [cos(theta), -sin(theta); sin(theta), cos(theta)];
+    Q = Rm * diag([1/A^2, 1/B^2]) * Rm';
+
+    r = r0(:); vv = v(:);
+    a = vv' * Q * vv;
+    b = 2 * (r' * Q * vv);
+    c = (r' * Q * r) - 1;
+
+    disc = b^2 - 4*a*c;
+    info.isInside = (c <= 1e-12);
+    info.Q = Q;
+    info.a = a;
+    info.b = b;
+    info.c = c;
+    info.disc = disc;
+
+    if VERBOSE
+        fprintf('\n-- Ellipse DEBUG --\n');
+        fprintf('A=%.3f, B=%.3f, theta=%.4f rad, inside=%d\n', A, B, theta, info.isInside);
+        fprintf('a=%.6e, b=%.6e, c=%.6e, disc=%.6e\n', a, b, c, disc);
+    end
+
+    if ~info.isInside
+        Te = 0;
+        return;
+    end
+
+    if a < 1e-12
+        Te = inf;
+        return;
+    end
+
+    if disc < 0
+        Te = inf;
+        return;
+    end
+
+    roots_tau = [(-b - sqrt(disc))/(2*a), (-b + sqrt(disc))/(2*a)];
+    roots_tau = roots_tau(roots_tau > 1e-9);
+
+    if isempty(roots_tau)
+        Te = 0;
+    else
+        Te = min(roots_tau);
     end
 end
 
