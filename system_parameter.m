@@ -21,6 +21,8 @@ if ~exist('UE_TEST_X', 'var')
 	UE_TEST_X = round(cellRadius * 0.5);    % 1-UE 모드일 때 x 위치 [m]
 end
 
+rng('shuffle');
+
 if UE_TEST_SINGLE
 	UE_x = UE_TEST_X;
 else
