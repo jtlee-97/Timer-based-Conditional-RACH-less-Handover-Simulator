@@ -1,5 +1,8 @@
 # Timer-based-Conditional-RACH-less-Handover-Simulator
 
+# Cite
+J. Lee, Y. Ahn and J. -H. Kim, "Timer-Synchronized RACH-Less Conditional Handover for Resource-Efficient LEO Non-Terrestrial Networks," in IEEE Wireless Communications Letters, vol. 15, pp. 3936-3940, 2026, doi: 10.1109/LWC.2026.3710904.
+
 MATLAB-based simulator for timer-synchronized CHO / RACH-less HO studies in LEO-like moving-beam scenarios.
 
 ## What this revision adds
